@@ -1,0 +1,23 @@
+CompilationUnit Nothing [] [
+ClassTypeDecl (ClassDecl [public] (Ident "Test") [] Nothing []
+    (ClassBody [
+        MemberDecl (
+            MethodDecl
+                [public,static]
+                []
+                (Just (PrimType IntT))
+                (Ident "add")
+                [FormalParam [] (PrimType IntT) False (VarId (Ident "a")),FormalParam [] (PrimType IntT) False (VarId (Ident "b"))]
+                []
+                Nothing
+                (MethodBody
+                    (Just
+                        (Block [
+                            BlockStmt (Return (Just (BinOp (ExpName (Name [Ident "a"])) Add (ExpName (Name [Ident "b"])))))
+                            ]
+                        ))
+                )
+            )
+        ])
+    )
+]
