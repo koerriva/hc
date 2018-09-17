@@ -31,8 +31,8 @@ compile filepath unit = do
   ast <- codegen filename unit
   runJIT ast "main"
 --  dumpOptObj' ast
-  dumpObj ast "x86_64-pc-none-elf" "x86-64" [] relocaModel codeModel codeOptLvl
-    where
-      relocaModel = readRelocationModel "Static"
-      codeModel = readCodeModel "Large"
-      codeOptLvl = readCodeGenOptModel "None"
+--  dumpObj ast "x86_64-pc-none-elf" "x86-64" [] relocaModel codeModel codeOptLvl
+--    where
+--      relocaModel = readRelocationModel "Static"
+--      codeModel = readCodeModel "Large"
+--      codeOptLvl = readCodeGenOptModel "None"

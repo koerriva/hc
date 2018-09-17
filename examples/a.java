@@ -9,7 +9,13 @@ public class Test {
         return a*b;
     }
 
+    public static int div(int a,int b){
+        return a/b;
+    }
+
     public static int main(){
-        add(1,mul(1,2));
+        int a = mul(2,2);
+        int r = add(1,a);
+        return div(r,5);
     }
 }

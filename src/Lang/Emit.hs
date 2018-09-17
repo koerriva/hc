@@ -99,8 +99,8 @@ codegenModule unit@(S.CompilationUnit package impt ty) = do
 --              var <- alloca ty Nothing
 --              store ty var (local ty nm)
               assign (toString str) (AST.LocalReference ty nm)
-            let stmts = getStmts body
-            insts <- mapM (flip cgen ctx) stmts
+            let blockStmts = getBlockStmts body
+            insts <- mapM (flip cgenBlockStmt ctx) blockStmts
             if retTy == Nothing then
               ret Nothing
             else
@@ -108,19 +108,47 @@ codegenModule unit@(S.CompilationUnit package impt ty) = do
 
       codegenMemberDecl _ ctx = undefined
 
-getStmts :: S.MethodBody -> [S.Stmt]
-getStmts (S.MethodBody Nothing) = []
-getStmts (S.MethodBody (Just (S.Block blockStmts))) = map getStmt blockStmts
+getBlockStmts :: S.MethodBody -> [S.BlockStmt]
+getBlockStmts (S.MethodBody Nothing) = []
+getBlockStmts (S.MethodBody (Just (S.Block blockStmts))) = blockStmts
 
 getStmt :: S.BlockStmt -> S.Stmt
 getStmt (S.BlockStmt stmt) = stmt
-getStmt _ = undefined
 
-cgen :: S.Stmt -> ModuleContext -> Codegen AST.Operand
-cgen (S.StmtBlock (S.Block blockStmts)) = undefined
-cgen (S.Return Nothing) = undefined
-cgen (S.ExpStmt exp) = cgenExp exp
-cgen (S.Return (Just exp)) = cgenExp exp
+getVars :: S.BlockStmt -> [(S.VarDecl,S.Type)]
+getVars (S.LocalVars _ ty varDecls) = map (\varDecl -> (varDecl,ty)) varDecls
+
+getLocalClass :: S.BlockStmt -> S.ClassDecl
+getLocalClass (S.LocalClass classDecl) = classDecl
+
+cgenBlockStmt :: S.BlockStmt -> ModuleContext -> Codegen AST.Operand
+cgenBlockStmt (S.BlockStmt stmt) ctx = cgenStmt stmt ctx
+cgenBlockStmt (S.LocalVars _ ty varDecls) ctx = do
+  a <- mapM (\varDecl -> cgenVar varDecl ty ctx) varDecls
+  return $ last a
+cgenBlockStmt _ _ = undefined
+
+cgenStmt :: S.Stmt -> ModuleContext -> Codegen AST.Operand
+cgenStmt (S.StmtBlock (S.Block blockStmts)) = undefined
+cgenStmt (S.Return Nothing) = undefined
+cgenStmt (S.ExpStmt exp) = cgenExp exp
+cgenStmt (S.Return (Just exp)) = cgenExp exp
+
+cgenVar :: S.VarDecl -> S.Type -> ModuleContext -> Codegen AST.Operand
+cgenVar (S.VarDecl (S.VarId (S.Ident strid)) Nothing) sty ctx = do
+  let ty = toLType (Just sty)
+      nm = AST.mkName strid
+  var <- alloca ty Nothing
+  assign strid var
+  return var
+cgenVar (S.VarDecl (S.VarId (S.Ident strid)) (Just (S.InitExp exp))) sty ctx = do
+  let ty = toLType (Just sty)
+      nm = AST.mkName strid
+  var <- alloca ty Nothing
+  val <- cgenExp exp ctx
+  assign strid var
+  return var
+
 
 cgenExp :: S.Exp -> ModuleContext -> Codegen AST.Operand
 cgenExp (S.ExpName (S.Name idents)) _ = do
@@ -157,6 +185,7 @@ cgenExp (S.BinOp expa op expb) ctx = do
     S.Sub   -> sub Type.i32 oa ob
     S.Mult  -> mul Type.i32 oa ob
     S.Div   -> udiv Type.i32 oa ob
+    S.Rem   -> urem Type.i32 oa ob
     _ -> error ("未知的操作符 : " ++ show op)
 
 toLType :: Maybe S.Type -> AST.Type

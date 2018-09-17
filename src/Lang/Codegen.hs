@@ -257,7 +257,16 @@ mul :: Type -> Operand -> Operand -> Codegen Operand
 mul ty a b = instr ty Nothing $ Mul False False a b []
 
 udiv :: Type -> Operand -> Operand -> Codegen Operand
-udiv ty a b = instr ty Nothing $ SDiv False a b []
+udiv ty a b = instr ty Nothing $ UDiv False a b []
+
+sdiv :: Type -> Operand -> Operand -> Codegen Operand
+sdiv ty a b = instr ty Nothing $ SDiv False a b []
+
+urem :: Type -> Operand -> Operand -> Codegen Operand
+urem ty a b = instr ty Nothing $ URem a b []
+
+srem :: Type -> Operand -> Operand -> Codegen Operand
+srem ty a b = instr ty Nothing $ SRem a b []
 
 fadd :: Operand -> Operand -> Codegen Operand
 fadd a b = instr double Nothing $ FAdd noFastMathFlags a b []
@@ -270,6 +279,9 @@ fmul a b = instr double Nothing $ FMul noFastMathFlags a b []
 
 fdiv :: Operand -> Operand -> Codegen Operand
 fdiv a b = instr double Nothing $ FDiv noFastMathFlags a b []
+
+frem :: Operand -> Operand -> Codegen Operand
+frem a b = instr double Nothing $ FRem noFastMathFlags a b []
 
 fcmp :: FP.FloatingPointPredicate -> Operand -> Operand -> Codegen Operand
 fcmp cond a b = instr double Nothing $ FCmp cond a b []
