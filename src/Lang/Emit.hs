@@ -11,6 +11,7 @@ import qualified LLVM.AST.Type as Type
 import qualified LLVM.AST.Constant as CONST
 import qualified LLVM.AST.Float as FT
 import qualified LLVM.Prelude as LP
+import LLVM.AST.AddrSpace
 import LLVM.Analysis
 import LLVM.Context
 import LLVM.Module
@@ -22,60 +23,90 @@ import Debug.Trace
 import Data.Char (ord)
 import LLVM.Prelude (toInteger)
 
-codegenModule :: S.CompilationUnit -> LLVM()
-codegenModule (S.CompilationUnit package impt ty ) = do
+scanModule :: S.CompilationUnit -> ModuleContext
+scanModule (S.CompilationUnit package impt typeDecls) =
+  foldl (\m decl -> scanTypeDecl decl m) Map.empty typeDecls
+
+scanTypeDecl :: S.TypeDecl -> ModuleContext -> ModuleContext
+scanTypeDecl (S.ClassTypeDecl classDecl) = scanClassDecl classDecl
+scanTypeDecl _ = id
+
+scanClassDecl :: S.ClassDecl -> ModuleContext -> ModuleContext
+scanClassDecl (S.ClassDecl _ (S.Ident className) _ _ _ (S.ClassBody decls)) =
+  flip (foldl (\m decl -> scanDecl decl m)) decls
+scanClassDecl _ = id
+
+scanDecl :: S.Decl -> ModuleContext -> ModuleContext
+scanDecl (S.MemberDecl memberDecl) = scanMemberDecl memberDecl
+scanDecl _ = id
+
+scanMemberDecl :: S.MemberDecl -> ModuleContext -> ModuleContext
+scanMemberDecl (S.MethodDecl modifiers tyParams retTy (S.Ident methodName) args _ exp _) =
+  Map.insert fnName fnTy
+  where
+    fnName = AST.mkName methodName
+    fnTy = Type.FunctionType (toLType retTy) (map (fst . toSig) args) False
+scanMemberDecl _ = id
+
+codegenModule :: S.CompilationUnit -> LLVM ()
+codegenModule unit@(S.CompilationUnit package impt ty) = do
+  let ctx = scanModule unit
+  traceM $ "Scan Function : " ++ show (ctx)
   case package of
-    Nothing -> codegenDefine ty
-    Just (S.PackageDecl name) -> withPackageName (getPackageName name) ty
+    Nothing -> codegenDefine ctx ty
+    Just (S.PackageDecl name) -> withPackageName (getPackageName name) ty ctx
     where
       getPackageName :: S.Name -> S.Ident
-      getPackageName (S.Name idents) = S.Ident $ foldl (\seek (S.Ident str) -> str ++ "_" ++ seek) "_" idents
-      withPackageName :: S.Ident -> [S.TypeDecl] -> LLVM ()
-      withPackageName (S.Ident pkname) typeDecls = do
+      getPackageName (S.Name idents) = S.Ident $ foldl (\seek (S.Ident str) -> seek ++ "_" ++ str) "" idents
+      withPackageName :: S.Ident -> [S.TypeDecl] -> ModuleContext -> LLVM ()
+      withPackageName (S.Ident pkname) typeDecls ctx = do
         renameModule pkname
-        codegenDefine typeDecls
-      codegenDefine :: [S.TypeDecl] -> LLVM ()
-      codegenDefine = mapM_ codegenTypeDecl
+        codegenDefine ctx typeDecls
+      codegenDefine :: ModuleContext -> [S.TypeDecl] -> LLVM ()
+      codegenDefine ctx = mapM_ (flip codegenTypeDecl ctx)
 
-      codegenTypeDecl :: S.TypeDecl -> LLVM ()
+      codegenTypeDecl :: S.TypeDecl -> ModuleContext -> LLVM ()
       codegenTypeDecl (S.InterfaceTypeDecl interfaceDecl) = undefined
       codegenTypeDecl (S.ClassTypeDecl classDecl) = codegenClassDecl classDecl
 
-      codegenClassDecl :: S.ClassDecl -> LLVM ()
-      codegenClassDecl (S.EnumDecl _ ident refTypes body) = undefined
-      codegenClassDecl (S.ClassDecl _ (S.Ident className) params refType refTypes classBody) = do
+      codegenClassDecl :: S.ClassDecl -> ModuleContext -> LLVM ()
+      codegenClassDecl (S.EnumDecl _ ident refTypes body) ctx = undefined
+      codegenClassDecl (S.ClassDecl _ (S.Ident className) params refType refTypes classBody) ctx = do
         pkname <- gets AST.moduleName
         renameModule (toString pkname ++ "_" ++ className)
-        codegenClassBody classBody
+        codegenClassBody classBody ctx
 
-      codegenClassBody :: S.ClassBody -> LLVM ()
-      codegenClassBody (S.ClassBody decls) = mapM_ codegenDecl decls
+      codegenClassBody :: S.ClassBody  -> ModuleContext -> LLVM ()
+      codegenClassBody (S.ClassBody decls) ctx = mapM_ (flip codegenDecl ctx) decls
 
-      codegenDecl :: S.Decl -> LLVM ()
+      codegenDecl :: S.Decl -> ModuleContext -> LLVM ()
       codegenDecl (S.MemberDecl memberDecl) = codegenMemberDecl memberDecl
       codegenDecl (S.InitDecl _ _) = undefined
 
-      codegenMemberDecl :: S.MemberDecl -> LLVM ()
-      codegenMemberDecl (S.FieldDecl _ ty varDecls) = undefined
-      codegenMemberDecl (S.MethodDecl modifiers tyParams retTy (S.Ident methodName) args _ exp methodBody) = do
+      codegenMemberDecl :: S.MemberDecl -> ModuleContext -> LLVM ()
+      codegenMemberDecl (S.FieldDecl _ ty varDecls) ctx = undefined
+      codegenMemberDecl (S.MethodDecl modifiers tyParams retTy (S.Ident methodName) args _ exp methodBody) ctx = do
+        traceM $ "ret type : " ++ show retTy
         case modifiers of
           S.Public:S.Static:S.Native:[] -> external (toLType retTy) methodName (map toSig args)
-          _ -> define (toLType retTy) methodName (map toSig args) (bls methodBody)
+          _ -> define (toLType retTy) methodName (map toSig args) (bls methodBody ctx)
         where
-          bls :: S.MethodBody -> [AST.BasicBlock]
-          bls body = createBlocks $ execCodegen $ do
+          bls :: S.MethodBody -> ModuleContext -> [AST.BasicBlock]
+          bls body ctx = createBlocks $ execCodegen $ do
             entry <- addBlock entryBlockName
             setBlock entry
             forM (map toSig args) $ \(ty,nm@(AST.Name str)) -> do
-              var <- alloca ty Nothing
-              store ty var (local ty nm)
-              assign (toString str) var
+--              var <- alloca ty Nothing
+--              store ty var (local ty nm)
+              assign (toString str) (AST.LocalReference ty nm)
             let stmts = getStmts body
+            insts <- mapM (flip cgen ctx) stmts
+            if retTy == Nothing then
+              ret Nothing
+            else
+              ret (Just (last insts))
 
-            forM (init stmts) $ \stmt -> cgen stmt
-            cgen (last stmts)
-
-      codegenMemberDecl _ = undefined
+      codegenMemberDecl _ ctx = undefined
 
 getStmts :: S.MethodBody -> [S.Stmt]
 getStmts (S.MethodBody Nothing) = []
@@ -85,38 +116,47 @@ getStmt :: S.BlockStmt -> S.Stmt
 getStmt (S.BlockStmt stmt) = stmt
 getStmt _ = undefined
 
-cgen :: S.Stmt -> Codegen ()
+cgen :: S.Stmt -> ModuleContext -> Codegen AST.Operand
 cgen (S.StmtBlock (S.Block blockStmts)) = undefined
 cgen (S.Return Nothing) = undefined
-cgen (S.Return (Just exp)) = do
-  operand <- cgenExp exp
-  traceM $ "codegen : ret -> " ++ show operand
-  ret operand
-  return ()
+cgen (S.ExpStmt exp) = cgenExp exp
+cgen (S.Return (Just exp)) = cgenExp exp
 
-cgenExp :: S.Exp -> Codegen AST.Operand
-cgenExp (S.ExpName (S.Name idents)) = do
+cgenExp :: S.Exp -> ModuleContext -> Codegen AST.Operand
+cgenExp (S.ExpName (S.Name idents)) _ = do
   let name = foldl (\seek (S.Ident str) -> seek ++ str) "" idents
   var <- getvar name
-  traceM $ "name : " ++ name ++ ", var : " ++ show var
   return var
+cgenExp (S.MethodInv (S.MethodCall (S.Name idents) fnParamsExp)) ctx = do
+  fnParams <- mapM (flip cgenExp ctx) fnParamsExp
+  call fn fnParams
+  where
+    fnName = foldl (\seek (S.Ident str) -> seek ++ str) "" idents
+    fnType = case Map.lookup (AST.mkName fnName) ctx of
+      Just f -> f
+      Nothing -> error $ "未定以的函数_" ++ fnName
+    fnP = Type.PointerType fnType (AddrSpace 0)
+    fn = externf fnP (AST.mkName fnName)
 
-cgenExp (S.Lit (S.Int i32)) = return $ AST.ConstantOperand (CONST.Int 32 i32)
-cgenExp (S.Lit (S.Word i16)) = return $ AST.ConstantOperand (CONST.Int 16 i16)
-cgenExp (S.Lit (S.Float float)) = return $ AST.ConstantOperand (CONST.Float (FT.Double float))
-cgenExp (S.Lit (S.Double double)) = return $ AST.ConstantOperand (CONST.Float (FT.Double double))
-cgenExp (S.Lit (S.Boolean bool)) = return $ AST.ConstantOperand (CONST.Int 8 (if bool then 1 else 0))
-cgenExp (S.Lit (S.Char char)) = return $ AST.ConstantOperand (CONST.Int 8 (toInteger (ord char)))
-cgenExp (S.Lit (S.String string)) = do
+cgenExp (S.Lit (S.Int i32)) _ = return $ AST.ConstantOperand (CONST.Int 32 i32)
+cgenExp (S.Lit (S.Word i16)) _ = return $ AST.ConstantOperand (CONST.Int 16 i16)
+cgenExp (S.Lit (S.Float float)) _ = return $ AST.ConstantOperand (CONST.Float (FT.Double float))
+cgenExp (S.Lit (S.Double double)) _ = return $ AST.ConstantOperand (CONST.Float (FT.Double double))
+cgenExp (S.Lit (S.Boolean bool)) _ = return $ AST.ConstantOperand (CONST.Int 8 (if bool then 1 else 0))
+cgenExp (S.Lit (S.Char char)) _ = return $ AST.ConstantOperand (CONST.Int 8 (toInteger (ord char)))
+cgenExp (S.Lit (S.String string)) _ = do
   let array = map (\char -> (CONST.Int 8 (toInteger (ord char)))) string
   return $ AST.ConstantOperand (CONST.Array Type.i8 array)
-cgenExp (S.Lit S.Null) = return $ AST.ConstantOperand (CONST.Null Type.void)
+cgenExp (S.Lit S.Null) _ = return $ AST.ConstantOperand (CONST.Null Type.void)
 
-cgenExp (S.BinOp expa op expb) = do
-  oa <- cgenExp expa
-  ob <- cgenExp expb
+cgenExp (S.BinOp expa op expb) ctx = do
+  oa <- cgenExp expa ctx
+  ob <- cgenExp expb ctx
   case op of
-    S.Add -> add Type.i32 oa ob
+    S.Add   -> add Type.i32 oa ob
+    S.Sub   -> sub Type.i32 oa ob
+    S.Mult  -> mul Type.i32 oa ob
+    S.Div   -> udiv Type.i32 oa ob
     _ -> error ("未知的操作符 : " ++ show op)
 
 toLType :: Maybe S.Type -> AST.Type
@@ -133,12 +173,12 @@ toLType (Just (S.PrimType S.DoubleT)) = Type.double
 toSig :: S.FormalParam -> (AST.Type,AST.Name)
 toSig (S.FormalParam _ ty _ (S.VarId (S.Ident name))) = (toLType (Just ty),AST.mkName name)
 
-codegen :: S.CompilationUnit -> IO AST.Module
-codegen unit = withContext $ \context -> do
+codegen :: FilePath -> S.CompilationUnit -> IO AST.Module
+codegen filename unit = withContext $ \context -> do
   withModuleFromAST context newast $ \modu -> do
     llstr <- moduleLLVMAssembly modu
     (putStrLn . toString') llstr
     return newast
   where
-    mod = emptyModule ""
+    mod = emptyModule filename
     newast = runLLVM mod (codegenModule unit)

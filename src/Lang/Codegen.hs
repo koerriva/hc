@@ -31,14 +31,19 @@ import Debug.Trace
 -- Module Level
 -------------------------------------------------------------------------------
 
+type ModuleContext = Map.Map AST.Name AST.Type
+
 newtype LLVM a = LLVM (State AST.Module a)
   deriving (Functor, Applicative, Monad, MonadState AST.Module )
 
 runLLVM :: AST.Module -> LLVM a -> AST.Module
 runLLVM mod (LLVM m) = execState m mod
 
-emptyModule :: String -> AST.Module
-emptyModule label = defaultModule { moduleName = toShortBS label }
+emptyModule :: FilePath -> AST.Module
+emptyModule filename = defaultModule {
+  moduleName = ""
+  , moduleSourceFileName = toShortBS filename
+  }
 
 renameModule :: String -> LLVM ()
 renameModule label = modify $ \s -> s {moduleName = toShortBS label}
@@ -66,14 +71,6 @@ external retty label argtys = addDefn $
   , returnType  = retty
   , basicBlocks = []
   }
-
----------------------------------------------------------------------------------
--- Types
--------------------------------------------------------------------------------
-
--- IEEE 754 double
---double :: Type
-----double = double
 
 -------------------------------------------------------------------------------
 -- Names
@@ -157,7 +154,6 @@ instr ty (Just nm) ins = do
 
 -- Store False ptr val Nothing 0 []
 instr ty Nothing ins@(Store _ ptr val _ _ _) = do
-  traceM $ "instr : " ++ show val
   n <- fresh
   let ref = (UnName n)
   blk <- current
@@ -166,10 +162,8 @@ instr ty Nothing ins@(Store _ ptr val _ _ _) = do
   return $ local ty ref
 
 instr ty Nothing ins = do
-  traceM $ "instr : " ++ show ins
   n <- fresh
   let ref = (UnName n)
-  traceM $ "ref : " ++ show ref
   blk <- current
   let i = stack blk
   modifyBlock (blk { stack = (ref := ins) : i } )
@@ -230,7 +224,6 @@ current = do
 
 assign :: String -> Operand -> Codegen ()
 assign var x = do
-  traceM $ "assign : " ++ show (var,x)
   lcls <- gets symtab
   modify $ \s -> s { symtab = [(var, x)] ++ lcls }
 
@@ -294,6 +287,9 @@ toArgs = map (\x -> (x, []))
 call :: Operand -> [Operand] -> Codegen Operand
 call fn args = instr void Nothing $ Call Nothing CC.C [] (Right fn) (toArgs args) [] []
 
+tailCall :: Operand -> [Operand] -> Codegen Operand
+tailCall fn args = instr void Nothing $ Call Nothing CC.C [] (Right fn) (toArgs args) [] []
+
 alloca :: Type -> Maybe Name -> Codegen Operand
 alloca ty nm = instr ty nm $ Alloca ty Nothing 0 []
 
@@ -310,11 +306,5 @@ br val = terminator $ Do $ Br val []
 cbr :: Operand -> Name -> Name -> Codegen (Named Terminator)
 cbr cond tr fl = terminator $ Do $ CondBr cond tr fl []
 
-ret :: Operand -> Codegen (Named Terminator)
-ret val = terminator $ Do $ Ret (Just val) []
-
-retVoid :: Codegen ()
-retVoid = do
-  blk <- current
-  modifyBlock (blk { term = Nothing })
-  return ()
+ret :: Maybe Operand -> Codegen (Named Terminator)
+ret val = terminator $ Do $ Ret val []

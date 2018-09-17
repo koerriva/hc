@@ -21,3 +21,5 @@ ClassTypeDecl (ClassDecl [public] (Ident "Test") [] Nothing []
         ])
     )
 ]
+
+(MethodCall (Name [Ident "add"]) [Lit (Int 1),Lit (Int 2)])

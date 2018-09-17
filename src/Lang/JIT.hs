@@ -23,6 +23,8 @@ import qualified Data.ByteString.Char8 as BC
 import Lang.Misc
 import Debug.Trace
 
+import System.FilePath
+
 foreign import ccall "dynamic" haskFun :: FunPtr (IO Int) -> (IO Int)
 
 run :: FunPtr a -> IO Int
@@ -49,19 +51,30 @@ dumpObj mod triple cpu features reloca cmodel lvl = do
   withTargetOptions $ \opts -> do
     (target,s)<- lookupTarget Nothing triple
     traceM $ "lookup target : " ++ show s
-    withTargetMachine target triple cpu (toMap features) opts reloca cmodel lvl dump
+    withTargetMachine target triple cpu (toMap features) opts reloca cmodel lvl (dump mod)
     where
       toMap :: [(CPUFeature, Bool)] -> Map.Map CPUFeature Bool
       toMap = foldl (\seek (k,v) -> Map.insert k v seek) Map.empty
-      dump :: TargetMachine -> IO ()
-      dump targetMachine = do
-        let f = File "a.o"
-        withContext $ \context -> do
-          withModuleFromAST context mod $ \m -> do
-            writeObjectToFile targetMachine f m
-            print "dump ok!!"
 
-runJIT :: AST.Module -> String -> IO AST.Module
+dumpOptObj' :: AST.Module -> IO ()
+dumpOptObj' mod = do
+  withHostTargetMachine $ \targetMachine -> do
+    withContext $ \context -> do
+      withModuleFromAST context mod $ \m -> do
+        withPassManager passes $ \pm -> do
+          runPassManager pm m
+          optmod <- moduleAST m
+          dump optmod targetMachine
+
+dump :: AST.Module -> TargetMachine -> IO ()
+dump astMod targetMachine = do
+  withContext $ \context -> do
+    withModuleFromAST context astMod $ \m -> do
+      let modFileName = (File . (++".o") . takeBaseName . toString) $ AST.moduleSourceFileName astMod
+      writeObjectToFile targetMachine modFileName m
+      putStrLn "dump ok !"
+
+runJIT :: AST.Module -> String -> IO ()
 runJIT mod fnName = do
   withContext $ \context ->
     jit context $ \executionEngine ->
@@ -81,6 +94,4 @@ runJIT mod fnName = do
                 res <- run fn
                 putStrLn $ "Evaluated to: " ++ show res
               Nothing -> return ()
-
-          -- Return the optimized module
-          return optmod
+          return ()
