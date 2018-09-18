@@ -20,5 +20,8 @@ simple = T.putStrLn $ ppllvm $ buildModule "exampleModule" $ mdo
 
   function "add" [(i32, "a"), (i32, "b")] i32 $ \[a, b] -> mdo
     entry <- block `named` "entry"; do
+      ptr <- alloca i32 Nothing 0
       c <- add a b
-      ret c
+      store ptr 0 c
+      r <- load ptr 0
+      ret r

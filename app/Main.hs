@@ -8,6 +8,10 @@ import Language.Java.Syntax
 import Lang.Emit
 import Lang.JIT
 import Lang.Misc
+import Lang.IRBuilder
+
+--main :: IO ()
+--main = simple
 
 main :: IO ()
 main = do
@@ -30,7 +34,7 @@ compile filepath unit = do
   putStrLn filename
   ast <- codegen filename unit
   runJIT ast "main"
---  dumpOptObj' ast
+  dumpOptObj' ast
 --  dumpObj ast "x86_64-pc-none-elf" "x86-64" [] relocaModel codeModel codeOptLvl
 --    where
 --      relocaModel = readRelocationModel "Static"

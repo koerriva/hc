@@ -8,9 +8,11 @@ import Control.Monad.State.Strict
 import qualified Language.Java.Syntax as S
 import qualified LLVM.AST as AST
 import qualified LLVM.AST.Type as Type
+import qualified LLVM.AST.Typed as Typed
 import qualified LLVM.AST.Constant as CONST
 import qualified LLVM.AST.Float as FT
 import qualified LLVM.Prelude as LP
+import qualified LLVM.AST.ParameterAttribute as PA
 import LLVM.AST.AddrSpace
 import LLVM.Analysis
 import LLVM.Context
@@ -86,7 +88,6 @@ codegenModule unit@(S.CompilationUnit package impt ty) = do
       codegenMemberDecl :: S.MemberDecl -> ModuleContext -> LLVM ()
       codegenMemberDecl (S.FieldDecl _ ty varDecls) ctx = undefined
       codegenMemberDecl (S.MethodDecl modifiers tyParams retTy (S.Ident methodName) args _ exp methodBody) ctx = do
-        traceM $ "ret type : " ++ show retTy
         case modifiers of
           S.Public:S.Static:S.Native:[] -> external (toLType retTy) methodName (map toSig args)
           _ -> define (toLType retTy) methodName (map toSig args) (bls methodBody ctx)
@@ -96,9 +97,9 @@ codegenModule unit@(S.CompilationUnit package impt ty) = do
             entry <- addBlock entryBlockName
             setBlock entry
             forM (map toSig args) $ \(ty,nm@(AST.Name str)) -> do
---              var <- alloca ty Nothing
---              store ty var (local ty nm)
-              assign (toString str) (AST.LocalReference ty nm)
+              var <- alloca ty
+              store var (local ty nm)
+              assign (toString str) var
             let blockStmts = getBlockStmts body
             insts <- mapM (flip cgenBlockStmt ctx) blockStmts
             if retTy == Nothing then
@@ -138,14 +139,15 @@ cgenVar :: S.VarDecl -> S.Type -> ModuleContext -> Codegen AST.Operand
 cgenVar (S.VarDecl (S.VarId (S.Ident strid)) Nothing) sty ctx = do
   let ty = toLType (Just sty)
       nm = AST.mkName strid
-  var <- alloca ty Nothing
+  var <- alloca ty
   assign strid var
   return var
 cgenVar (S.VarDecl (S.VarId (S.Ident strid)) (Just (S.InitExp exp))) sty ctx = do
   let ty = toLType (Just sty)
       nm = AST.mkName strid
-  var <- alloca ty Nothing
+  var <- alloca ty
   val <- cgenExp exp ctx
+  store var val
   assign strid var
   return var
 
@@ -154,10 +156,11 @@ cgenExp :: S.Exp -> ModuleContext -> Codegen AST.Operand
 cgenExp (S.ExpName (S.Name idents)) _ = do
   let name = foldl (\seek (S.Ident str) -> seek ++ str) "" idents
   var <- getvar name
-  return var
+  val <- load var
+  return val
 cgenExp (S.MethodInv (S.MethodCall (S.Name idents) fnParamsExp)) ctx = do
   fnParams <- mapM (flip cgenExp ctx) fnParamsExp
-  call fn fnParams
+  call fn (map (\p -> (p,[PA.InReg,PA.ReadOnly])) fnParams)
   where
     fnName = foldl (\seek (S.Ident str) -> seek ++ str) "" idents
     fnType = case Map.lookup (AST.mkName fnName) ctx of
