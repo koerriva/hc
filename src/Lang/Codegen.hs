@@ -15,6 +15,7 @@ import Control.Applicative
 import LLVM.AST
 import LLVM.AST.Global
 import LLVM.AST.Type
+import LLVM.AST.Typed
 import qualified LLVM.AST as AST
 
 import qualified LLVM.AST.Linkage as L
@@ -144,30 +145,22 @@ fresh = do
   modify $ \s -> s { count = 1 + i }
   return $ i + 1
 
-instr :: Type -> Maybe Name -> Instruction -> Codegen (Operand)
-instr ty (Just nm) ins = do
-  let ref = nm
+instr :: Type -> Instruction -> Codegen (Operand)
+instr retTy ins = do
+  n <- fresh
+  let ref = (UnName n)
   blk <- current
   let i = stack blk
   modifyBlock (blk { stack = (ref := ins) : i } )
-  return $ local ty ref
+--  traceM $ "inster : " ++ show retTy ++ ", " ++ show ins
+  return $ local retTy ref
 
--- Store False ptr val Nothing 0 []
-instr ty Nothing ins@(Store _ ptr val _ _ _) = do
-  n <- fresh
-  let ref = (UnName n)
+instrVoid :: Instruction -> Codegen ()
+instrVoid ins = do
   blk <- current
   let i = stack blk
   modifyBlock (blk { stack = (Do ins) : i } )
-  return $ local ty ref
-
-instr ty Nothing ins = do
-  n <- fresh
-  let ref = (UnName n)
-  blk <- current
-  let i = stack blk
-  modifyBlock (blk { stack = (ref := ins) : i } )
-  return $ local ty ref
+  return ()
 
 terminator :: Named Terminator -> Codegen (Named Terminator)
 terminator trm = do
@@ -248,75 +241,109 @@ externf ty nm = ConstantOperand $ C.GlobalReference ty nm
 
 -- Arithmetic and Constants
 add :: Type -> Operand -> Operand -> Codegen Operand
-add ty a b = instr ty Nothing $ Add False False a b []
+add ty a b = instr ty $ Add False False a b []
 
 sub :: Type -> Operand -> Operand -> Codegen Operand
-sub ty a b = instr ty Nothing $ Sub False False a b []
+sub ty a b = instr ty $ Sub False False a b []
 
 mul :: Type -> Operand -> Operand -> Codegen Operand
-mul ty a b = instr ty Nothing $ Mul False False a b []
+mul ty a b = instr ty $ Mul False False a b []
 
 udiv :: Type -> Operand -> Operand -> Codegen Operand
-udiv ty a b = instr ty Nothing $ UDiv False a b []
+udiv ty a b = instr ty $ UDiv False a b []
 
 sdiv :: Type -> Operand -> Operand -> Codegen Operand
-sdiv ty a b = instr ty Nothing $ SDiv False a b []
+sdiv ty a b = instr ty $ SDiv False a b []
 
 urem :: Type -> Operand -> Operand -> Codegen Operand
-urem ty a b = instr ty Nothing $ URem a b []
+urem ty a b = instr ty $ URem a b []
 
 srem :: Type -> Operand -> Operand -> Codegen Operand
-srem ty a b = instr ty Nothing $ SRem a b []
+srem ty a b = instr ty $ SRem a b []
 
 fadd :: Operand -> Operand -> Codegen Operand
-fadd a b = instr double Nothing $ FAdd noFastMathFlags a b []
+fadd a b = instr double $ FAdd noFastMathFlags a b []
 
 fsub :: Operand -> Operand -> Codegen Operand
-fsub a b = instr double Nothing $ FSub noFastMathFlags a b []
+fsub a b = instr double $ FSub noFastMathFlags a b []
 
 fmul :: Operand -> Operand -> Codegen Operand
-fmul a b = instr double Nothing $ FMul noFastMathFlags a b []
+fmul a b = instr double $ FMul noFastMathFlags a b []
 
 fdiv :: Operand -> Operand -> Codegen Operand
-fdiv a b = instr double Nothing $ FDiv noFastMathFlags a b []
+fdiv a b = instr double $ FDiv noFastMathFlags a b []
 
 frem :: Operand -> Operand -> Codegen Operand
-frem a b = instr double Nothing $ FRem noFastMathFlags a b []
+frem a b = instr double $ FRem noFastMathFlags a b []
 
 fcmp :: FP.FloatingPointPredicate -> Operand -> Operand -> Codegen Operand
-fcmp cond a b = instr double Nothing $ FCmp cond a b []
+fcmp cond a b = instr double $ FCmp cond a b []
 
 cons :: C.Constant -> Operand
 cons = ConstantOperand
 
 uitofp :: Type -> Operand -> Codegen Operand
-uitofp ty a = instr ty Nothing $ UIToFP a ty []
+uitofp ty a = instr ty $ UIToFP a ty []
 
 toArgs :: [Operand] -> [(Operand, [A.ParameterAttribute])]
 toArgs = map (\x -> (x, []))
 
 -- Effects
-call :: Operand -> [Operand] -> Codegen Operand
-call fn args = instr void Nothing $ Call Nothing CC.C [] (Right fn) (toArgs args) [] []
 
-tailCall :: Operand -> [Operand] -> Codegen Operand
-tailCall fn args = instr void Nothing $ Call Nothing CC.C [] (Right fn) (toArgs args) [] []
+call :: Operand -> [(Operand, [A.ParameterAttribute])] -> Codegen Operand
+call fn args = do
+  let ins = Call {
+    AST.tailCallKind = Nothing
+  , AST.callingConvention = CC.C
+  , AST.returnAttributes = []
+  , AST.function = Right fn
+  , AST.arguments = args
+  , AST.functionAttributes = []
+  , AST.metadata = []
+  }
+  case typeOf fn of
+      FunctionType r _ _ -> case r of
+        VoidType -> instrVoid ins >> (pure (ConstantOperand (C.Undef void)))
+        _        -> instr r ins
+      PointerType (FunctionType r _ _) _ -> case r of
+        VoidType -> instrVoid ins >> (pure (ConstantOperand (C.Undef void)))
+        _        -> instr r ins
+      _ -> error "Cannot call non-function (Malformed AST)."
 
-alloca :: Type -> Maybe Name -> Codegen Operand
-alloca ty nm = instr ty nm $ Alloca ty Nothing 0 []
+alloca :: Type -> Codegen Operand
+alloca ty = instr (ptr ty) $ Alloca ty Nothing 0 []
 
-store :: Type -> Operand -> Operand -> Codegen Operand
-store ty ptr val = instr ty Nothing $ Store False ptr val Nothing 0 []
+store :: Operand -> Operand -> Codegen ()
+store ptr val = instrVoid $ Store False ptr val Nothing 0 []
 
-load :: Type -> Operand -> Codegen Operand
-load ty ptr = instr ty Nothing $ Load False ptr Nothing 0 []
+load :: Operand -> Codegen Operand
+load a = instr retty $ Load False a Nothing 0 []
+  where
+    retty = case typeOf a of
+      PointerType ty _ -> ty
+      _ -> error "Cannot load non-pointer (Malformed AST)."
 
+extractElement :: Operand -> Operand -> Codegen Operand
+extractElement v i = instr elemTyp $ ExtractElement v i []
+  where elemTyp =
+          case typeOf v of
+            VectorType _ typ -> typ
+            _ -> error "extractElement: Expected a vector type (malformed AST)."
+
+extractValue :: Operand -> [Word32] -> Codegen Operand
+extractValue array idx = instr (extractValueType idx (typeOf array)) $ ExtractValue array idx []
+
+insertValue :: Operand -> Operand -> [Word32] -> Codegen Operand
+insertValue array val idx = instr (typeOf array) $ InsertValue array val idx []
 -- Control Flow
 br :: Name -> Codegen (Named Terminator)
 br val = terminator $ Do $ Br val []
 
 cbr :: Operand -> Name -> Name -> Codegen (Named Terminator)
 cbr cond tr fl = terminator $ Do $ CondBr cond tr fl []
+
+--ret :: MonadIRBuilder m => Operand -> m ()
+--ret val = emitTerm (Ret (Just val) [])
 
 ret :: Maybe Operand -> Codegen (Named Terminator)
 ret val = terminator $ Do $ Ret val []

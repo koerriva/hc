@@ -7,7 +7,7 @@ import Data.Text.Lazy.IO as T
 
 import LLVM.Pretty  -- from the llvm-hs-pretty package
 import LLVM.AST hiding (function)
-import LLVM.AST.Type as Type
+import LLVM.AST.Type as AST
 import qualified LLVM.AST.Float as F
 import qualified LLVM.AST.Constant as C
 

@@ -8,9 +8,11 @@ import Control.Monad.State.Strict
 import qualified Language.Java.Syntax as S
 import qualified LLVM.AST as AST
 import qualified LLVM.AST.Type as Type
+import qualified LLVM.AST.Typed as Typed
 import qualified LLVM.AST.Constant as CONST
 import qualified LLVM.AST.Float as FT
 import qualified LLVM.Prelude as LP
+import qualified LLVM.AST.ParameterAttribute as PA
 import LLVM.AST.AddrSpace
 import LLVM.Analysis
 import LLVM.Context
@@ -86,7 +88,6 @@ codegenModule unit@(S.CompilationUnit package impt ty) = do
       codegenMemberDecl :: S.MemberDecl -> ModuleContext -> LLVM ()
       codegenMemberDecl (S.FieldDecl _ ty varDecls) ctx = undefined
       codegenMemberDecl (S.MethodDecl modifiers tyParams retTy (S.Ident methodName) args _ exp methodBody) ctx = do
-        traceM $ "ret type : " ++ show retTy
         case modifiers of
           S.Public:S.Static:S.Native:[] -> external (toLType retTy) methodName (map toSig args)
           _ -> define (toLType retTy) methodName (map toSig args) (bls methodBody ctx)
@@ -96,9 +97,9 @@ codegenModule unit@(S.CompilationUnit package impt ty) = do
             entry <- addBlock entryBlockName
             setBlock entry
             forM (map toSig args) $ \(ty,nm@(AST.Name str)) -> do
---              var <- alloca ty Nothing
---              store ty var (local ty nm)
-              assign (toString str) (AST.LocalReference ty nm)
+              var <- alloca ty
+              store var (local ty nm)
+              assign (toString str) var
             let blockStmts = getBlockStmts body
             insts <- mapM (flip cgenBlockStmt ctx) blockStmts
             if retTy == Nothing then
@@ -129,35 +130,44 @@ cgenBlockStmt (S.LocalVars _ ty varDecls) ctx = do
 cgenBlockStmt _ _ = undefined
 
 cgenStmt :: S.Stmt -> ModuleContext -> Codegen AST.Operand
-cgenStmt (S.StmtBlock (S.Block blockStmts)) = undefined
-cgenStmt (S.Return Nothing) = undefined
+cgenStmt (S.StmtBlock (S.Block blockStmts)) = \ctx -> undefined
+cgenStmt (S.Return Nothing) = \ctx -> undefined
 cgenStmt (S.ExpStmt exp) = cgenExp exp
 cgenStmt (S.Return (Just exp)) = cgenExp exp
+cgenStmt (S.IfThen exp stmt) = \ctx -> undefined
 
 cgenVar :: S.VarDecl -> S.Type -> ModuleContext -> Codegen AST.Operand
 cgenVar (S.VarDecl (S.VarId (S.Ident strid)) Nothing) sty ctx = do
   let ty = toLType (Just sty)
       nm = AST.mkName strid
-  var <- alloca ty Nothing
+  var <- alloca ty
   assign strid var
   return var
 cgenVar (S.VarDecl (S.VarId (S.Ident strid)) (Just (S.InitExp exp))) sty ctx = do
   let ty = toLType (Just sty)
       nm = AST.mkName strid
-  var <- alloca ty Nothing
+  traceM $ "创建变量 : " ++ strid ++ ", " ++ show exp
   val <- cgenExp exp ctx
+  var <- alloca (pickTy val ty)
+  store var val
   assign strid var
   return var
-
+  where
+    pickTy :: AST.Operand -> AST.Type -> AST.Type
+    pickTy (AST.ConstantOperand (CONST.Array ty' consts)) _ = Type.ArrayType (len consts) ty'
+    pickTy _ ty = ty
+    len :: [CONST.Constant] -> LP.Word64
+    len = fromIntegral . length
 
 cgenExp :: S.Exp -> ModuleContext -> Codegen AST.Operand
 cgenExp (S.ExpName (S.Name idents)) _ = do
   let name = foldl (\seek (S.Ident str) -> seek ++ str) "" idents
   var <- getvar name
-  return var
+  val <- load var
+  return val
 cgenExp (S.MethodInv (S.MethodCall (S.Name idents) fnParamsExp)) ctx = do
   fnParams <- mapM (flip cgenExp ctx) fnParamsExp
-  call fn fnParams
+  call fn (map (\p -> (p,[PA.InReg,PA.ReadOnly])) fnParams)
   where
     fnName = foldl (\seek (S.Ident str) -> seek ++ str) "" idents
     fnType = case Map.lookup (AST.mkName fnName) ctx of
@@ -188,6 +198,33 @@ cgenExp (S.BinOp expa op expb) ctx = do
     S.Rem   -> urem Type.i32 oa ob
     _ -> error ("未知的操作符 : " ++ show op)
 
+{- 数组生成 -}
+-- 访问数组
+cgenExp (S.ArrayAccess (S.ArrayIndex exp exps)) ctx = do
+  val <- cgenExp exp ctx
+  v <- extractValue val (map getidx exps)
+  traceM $ "访问数组 : " ++ show val
+  return v
+
+-- 创建数组
+-- 数组赋值
+cgenExp (S.Assign lhs op exp2) ctx = do
+  (val,idx) <- codegenArrayLhs lhs
+  val2 <- cgenExp exp2 ctx
+  r <- insertValue val val2 idx
+  return val2
+  where
+    codegenArrayLhs :: S.Lhs -> Codegen (AST.Operand,[LP.Word32])
+    codegenArrayLhs (S.ArrayLhs (S.ArrayIndex arrayName idxs)) = do
+      val <- cgenExp arrayName ctx
+      return (val,map getidx idxs)
+--      error $ "cgeExp error : " ++ show name ++ ", " ++ show idxs
+
+cgenExp a ctx = error $ "cgeExp error : " ++ show a
+
+getidx :: S.Exp -> LP.Word32
+getidx (S.Lit (S.Int idx)) = fromIntegral idx
+
 toLType :: Maybe S.Type -> AST.Type
 toLType Nothing = Type.void
 toLType (Just (S.PrimType S.BooleanT)) = Type.i8
@@ -198,6 +235,8 @@ toLType (Just (S.PrimType S.LongT)) = Type.i64
 toLType (Just (S.PrimType S.CharT)) = Type.i8
 toLType (Just (S.PrimType S.FloatT)) = Type.float
 toLType (Just (S.PrimType S.DoubleT)) = Type.double
+toLType (Just (S.RefType (S.ArrayType sty))) = Type.ArrayType 0 (toLType (Just sty))
+toLType (Just a) = error $ show a
 
 toSig :: S.FormalParam -> (AST.Type,AST.Name)
 toSig (S.FormalParam _ ty _ (S.VarId (S.Ident name))) = (toLType (Just ty),AST.mkName name)

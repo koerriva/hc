@@ -84,9 +84,6 @@ runJIT mod fnName = do
           {-runPassManager pm m-}
           optmod <- moduleAST m
           s <- moduleLLVMAssembly m
-
-          putStrLn $ toString' s
-
           EE.withModuleInEngine executionEngine m $ \ee -> do
             mainfn <- EE.getFunction ee (AST.mkName fnName)
             case mainfn of

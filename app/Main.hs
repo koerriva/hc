@@ -8,6 +8,10 @@ import Language.Java.Syntax
 import Lang.Emit
 import Lang.JIT
 import Lang.Misc
+import Lang.IRBuilder
+
+--main :: IO ()
+--main = simple
 
 main :: IO ()
 main = do
@@ -29,10 +33,10 @@ compile filepath unit = do
   let filename = takeFileName filepath
   putStrLn filename
   ast <- codegen filename unit
-  runJIT ast "main"
+  runJIT ast "test"
 --  dumpOptObj' ast
---  dumpObj ast "x86_64-pc-none-elf" "x86-64" [] relocaModel codeModel codeOptLvl
---    where
---      relocaModel = readRelocationModel "Static"
---      codeModel = readCodeModel "Large"
---      codeOptLvl = readCodeGenOptModel "None"
+  dumpObj ast "x86_64-pc-none-elf" "x86-64" [] relocaModel codeModel codeOptLvl
+    where
+      relocaModel = readRelocationModel "Static"
+      codeModel = readCodeModel "Large"
+      codeOptLvl = readCodeGenOptModel "None"
