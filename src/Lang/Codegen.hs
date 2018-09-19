@@ -152,7 +152,7 @@ instr retTy ins = do
   blk <- current
   let i = stack blk
   modifyBlock (blk { stack = (ref := ins) : i } )
-  traceM $ "inster : " ++ show retTy ++ ", " ++ show ins
+--  traceM $ "inster : " ++ show retTy ++ ", " ++ show ins
   return $ local retTy ref
 
 instrVoid :: Instruction -> Codegen ()
@@ -323,6 +323,18 @@ load a = instr retty $ Load False a Nothing 0 []
       PointerType ty _ -> ty
       _ -> error "Cannot load non-pointer (Malformed AST)."
 
+extractElement :: Operand -> Operand -> Codegen Operand
+extractElement v i = instr elemTyp $ ExtractElement v i []
+  where elemTyp =
+          case typeOf v of
+            VectorType _ typ -> typ
+            _ -> error "extractElement: Expected a vector type (malformed AST)."
+
+extractValue :: Operand -> [Word32] -> Codegen Operand
+extractValue array idx = instr (extractValueType idx (typeOf array)) $ ExtractValue array idx []
+
+insertValue :: Operand -> Operand -> [Word32] -> Codegen Operand
+insertValue array val idx = instr (typeOf array) $ InsertValue array val idx []
 -- Control Flow
 br :: Name -> Codegen (Named Terminator)
 br val = terminator $ Do $ Br val []

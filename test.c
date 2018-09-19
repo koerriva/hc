@@ -1,8 +1,7 @@
 #include <stdio.h>
 
-extern int add(int,int);
+extern int test();
 
 void main(void){
-    int r = add(100,1000);
-    printf("r : %d\n",r);
+    test();
 }

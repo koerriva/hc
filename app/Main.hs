@@ -33,10 +33,10 @@ compile filepath unit = do
   let filename = takeFileName filepath
   putStrLn filename
   ast <- codegen filename unit
-  runJIT ast "main"
-  dumpOptObj' ast
---  dumpObj ast "x86_64-pc-none-elf" "x86-64" [] relocaModel codeModel codeOptLvl
---    where
---      relocaModel = readRelocationModel "Static"
---      codeModel = readCodeModel "Large"
---      codeOptLvl = readCodeGenOptModel "None"
+  runJIT ast "test"
+--  dumpOptObj' ast
+  dumpObj ast "x86_64-pc-none-elf" "x86-64" [] relocaModel codeModel codeOptLvl
+    where
+      relocaModel = readRelocationModel "Static"
+      codeModel = readCodeModel "Large"
+      codeOptLvl = readCodeGenOptModel "None"

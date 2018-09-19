@@ -130,10 +130,11 @@ cgenBlockStmt (S.LocalVars _ ty varDecls) ctx = do
 cgenBlockStmt _ _ = undefined
 
 cgenStmt :: S.Stmt -> ModuleContext -> Codegen AST.Operand
-cgenStmt (S.StmtBlock (S.Block blockStmts)) = undefined
-cgenStmt (S.Return Nothing) = undefined
+cgenStmt (S.StmtBlock (S.Block blockStmts)) = \ctx -> undefined
+cgenStmt (S.Return Nothing) = \ctx -> undefined
 cgenStmt (S.ExpStmt exp) = cgenExp exp
 cgenStmt (S.Return (Just exp)) = cgenExp exp
+cgenStmt (S.IfThen exp stmt) = \ctx -> undefined
 
 cgenVar :: S.VarDecl -> S.Type -> ModuleContext -> Codegen AST.Operand
 cgenVar (S.VarDecl (S.VarId (S.Ident strid)) Nothing) sty ctx = do
@@ -145,12 +146,18 @@ cgenVar (S.VarDecl (S.VarId (S.Ident strid)) Nothing) sty ctx = do
 cgenVar (S.VarDecl (S.VarId (S.Ident strid)) (Just (S.InitExp exp))) sty ctx = do
   let ty = toLType (Just sty)
       nm = AST.mkName strid
-  var <- alloca ty
+  traceM $ "创建变量 : " ++ strid ++ ", " ++ show exp
   val <- cgenExp exp ctx
+  var <- alloca (pickTy val ty)
   store var val
   assign strid var
   return var
-
+  where
+    pickTy :: AST.Operand -> AST.Type -> AST.Type
+    pickTy (AST.ConstantOperand (CONST.Array ty' consts)) _ = Type.ArrayType (len consts) ty'
+    pickTy _ ty = ty
+    len :: [CONST.Constant] -> LP.Word64
+    len = fromIntegral . length
 
 cgenExp :: S.Exp -> ModuleContext -> Codegen AST.Operand
 cgenExp (S.ExpName (S.Name idents)) _ = do
@@ -191,6 +198,33 @@ cgenExp (S.BinOp expa op expb) ctx = do
     S.Rem   -> urem Type.i32 oa ob
     _ -> error ("未知的操作符 : " ++ show op)
 
+{- 数组生成 -}
+-- 访问数组
+cgenExp (S.ArrayAccess (S.ArrayIndex exp exps)) ctx = do
+  val <- cgenExp exp ctx
+  v <- extractValue val (map getidx exps)
+  traceM $ "访问数组 : " ++ show val
+  return v
+
+-- 创建数组
+-- 数组赋值
+cgenExp (S.Assign lhs op exp2) ctx = do
+  (val,idx) <- codegenArrayLhs lhs
+  val2 <- cgenExp exp2 ctx
+  r <- insertValue val val2 idx
+  return val2
+  where
+    codegenArrayLhs :: S.Lhs -> Codegen (AST.Operand,[LP.Word32])
+    codegenArrayLhs (S.ArrayLhs (S.ArrayIndex arrayName idxs)) = do
+      val <- cgenExp arrayName ctx
+      return (val,map getidx idxs)
+--      error $ "cgeExp error : " ++ show name ++ ", " ++ show idxs
+
+cgenExp a ctx = error $ "cgeExp error : " ++ show a
+
+getidx :: S.Exp -> LP.Word32
+getidx (S.Lit (S.Int idx)) = fromIntegral idx
+
 toLType :: Maybe S.Type -> AST.Type
 toLType Nothing = Type.void
 toLType (Just (S.PrimType S.BooleanT)) = Type.i8
@@ -201,6 +235,8 @@ toLType (Just (S.PrimType S.LongT)) = Type.i64
 toLType (Just (S.PrimType S.CharT)) = Type.i8
 toLType (Just (S.PrimType S.FloatT)) = Type.float
 toLType (Just (S.PrimType S.DoubleT)) = Type.double
+toLType (Just (S.RefType (S.ArrayType sty))) = Type.ArrayType 0 (toLType (Just sty))
+toLType (Just a) = error $ show a
 
 toSig :: S.FormalParam -> (AST.Type,AST.Name)
 toSig (S.FormalParam _ ty _ (S.VarId (S.Ident name))) = (toLType (Just ty),AST.mkName name)
