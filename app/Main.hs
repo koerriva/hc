@@ -8,10 +8,6 @@ import Language.Java.Syntax
 import Lang.Emit
 import Lang.JIT
 import Lang.Misc
-import Lang.IRBuilder
-
---main :: IO ()
---main = simple
 
 main :: IO ()
 main = do

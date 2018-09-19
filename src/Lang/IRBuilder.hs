@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecursiveDo #-}
 
-module Lang.IRBuilder where
+module Lang.IRBuilder (simple) where
 
 import Data.Text.Lazy.IO as T
 
 import LLVM.Pretty  -- from the llvm-hs-pretty package
 import LLVM.AST hiding (function)
-import LLVM.AST.Type as AST
+import LLVM.AST.Type as Type
 import qualified LLVM.AST.Float as F
 import qualified LLVM.AST.Constant as C
 
