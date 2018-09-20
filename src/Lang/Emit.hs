@@ -135,19 +135,45 @@ cgenBlockStmt (S.LocalVars _ ty varDecls) ctx = do
 cgenBlockStmt _ _ = undefined
 
 cgenStmt :: S.Stmt -> ModuleContext -> Codegen AST.Operand
-cgenStmt (S.StmtBlock (S.Block blockStmts)) = \ctx -> undefined
+cgenStmt (S.StmtBlock (S.Block blockStmts)) = \ctx -> do
+--  error $ "cgenStmt : " ++ show blockStmts
+  insts <- mapM (flip cgenBlockStmt ctx) blockStmts
+  return $ last insts
 cgenStmt (S.Return Nothing) = \ctx -> undefined
 cgenStmt (S.ExpStmt exp) = cgenExp exp
 cgenStmt (S.Return (Just exp)) = cgenExp exp
-cgenStmt (S.IfThen exp stmt) = \ctx -> undefined
+cgenStmt (S.IfThen exp stmt) = \ctx -> do
+  ifthen <- addBlock "if.then"
+  ifelse <- addBlock "if.else"
+  cond <- cgenExp exp ctx
+  cbr cond ifthen ifelse
+  -- if then
+  setBlock ifthen
+  trval <- cgenStmt stmt ctx
+  br ifelse
+  ifthen <- getBlock
+  -- if else
+  setBlock ifelse
+  return trval
 cgenStmt (S.IfThenElse exp stmt1 stmt2) = \ctx -> do
   ifthen <- addBlock "if.then"
   ifelse <- addBlock "if.else"
   ifexit <- addBlock "if.exit"
   cond <- cgenExp exp ctx
-  test <- icmp IP.EQ undefined cond
   cbr cond ifthen ifelse
-  return cond
+  -- if then
+  setBlock ifthen
+  trval <- cgenStmt stmt1 ctx
+  br ifexit
+  ifthen <- getBlock
+  -- if else
+  setBlock ifelse
+  frval <- cgenStmt stmt2 ctx
+  br ifexit
+  ifelse <- getBlock
+  setBlock ifexit
+  r <- phi [(trval,ifthen),(frval,ifelse)]
+  return r
 
 cgenVar :: S.VarDecl -> S.Type -> ModuleContext -> Codegen AST.Operand
 cgenVar (S.VarDecl (S.VarId (S.Ident strid)) Nothing) sty ctx = do
@@ -214,6 +240,12 @@ cgenExp (S.BinOp expa op expb) ctx = do
     S.Mult  -> mul Type.i32 oa ob
     S.Div   -> udiv Type.i32 oa ob
     S.Rem   -> urem Type.i32 oa ob
+    S.GThan -> icmp IP.SGT oa ob
+    S.GThanE  -> icmp IP.SGE oa ob
+    S.LThan -> icmp IP.SLT oa ob
+    S.LThanE  -> icmp IP.SLE oa ob
+    S.Equal -> icmp IP.EQ oa ob
+    S.NotEq -> icmp IP.NE oa ob
     _ -> error ("未知的操作符 : " ++ show op)
 
 {- 数组生成 -}

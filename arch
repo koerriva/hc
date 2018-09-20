@@ -1,1 +1,15 @@
-(MethodInv (MethodCall (Name [Ident "putchar"]) [ArrayAccess (ArrayIndex (ExpName (Name [Ident "str"])) [Lit (Int 0)])]))
+CompilationUnit
+(Just (PackageDecl (Name [Ident "com",Ident "koerriva"])))
+[]
+[ClassTypeDecl
+(ClassDecl [public] (Ident "Test") [] Nothing []
+(ClassBody
+    [MemberDecl
+        (MethodDecl [public,static] [] (Just (PrimType IntT)) (Ident "test") [] [] Nothing
+            (MethodBody
+            (Just
+            (Block [
+                LocalVars [] (PrimType IntT) [VarDecl (VarId (Ident "a")) (Just (InitExp (Lit (Int 29)))),VarDecl (VarId (Ident "b")) (Just (InitExp (Lit (Int 2))))],
+                BlockStmt (IfThen (BinOp (ExpName (Name [Ident "a"])) GThan (ExpName (Name [Ident "b"]))) (Return (Just (ExpName (Name [Ident "a"]))))),
+                BlockStmt (Return (Just (ExpName (Name [Ident "b"]))))]
+            ))))]))]

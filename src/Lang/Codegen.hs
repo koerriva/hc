@@ -366,3 +366,9 @@ ret val = terminator $ Do $ Ret val []
 
 sext :: Operand -> Type -> Codegen Operand
 sext a to = instr to $ SExt a to []
+
+phi :: [(Operand, Name)] -> Codegen Operand
+phi [] = instr VoidType $ Phi VoidType [] []
+phi incoming@(i:_) = instr ty $ Phi ty incoming []
+  where
+    ty = typeOf (fst i) -- result type
