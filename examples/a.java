@@ -3,7 +3,11 @@ package com.koerriva;
 public class Test {
 
     public static int test(){
-        char[] str1 = "1234567";
-        return str1[0];
+        int a=0,b=1;
+        if(a>b){
+            return a;
+        }else{
+            return b;
+        }
     }
 }

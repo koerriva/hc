@@ -12,6 +12,8 @@ import qualified LLVM.AST.Typed as Typed
 import qualified LLVM.AST.Constant as CONST
 import qualified LLVM.AST.Float as FT
 import qualified LLVM.Prelude as LP
+import qualified LLVM.AST.FloatingPointPredicate as FP
+import qualified LLVM.AST.IntegerPredicate as IP
 import qualified LLVM.AST.ParameterAttribute as PA
 import LLVM.AST.AddrSpace
 import LLVM.Analysis
@@ -104,7 +106,10 @@ codegenModule unit@(S.CompilationUnit package impt ty) = do
             insts <- mapM (flip cgenBlockStmt ctx) blockStmts
             if retTy == Nothing then
               ret Nothing
-            else
+            else do
+              let lastinst = last insts
+--              r <- sext (last insts) (toLType retTy)
+              traceM $ "last inst : " ++ show (last insts)
               ret (Just (last insts))
 
       codegenMemberDecl _ ctx = undefined
@@ -135,6 +140,14 @@ cgenStmt (S.Return Nothing) = \ctx -> undefined
 cgenStmt (S.ExpStmt exp) = cgenExp exp
 cgenStmt (S.Return (Just exp)) = cgenExp exp
 cgenStmt (S.IfThen exp stmt) = \ctx -> undefined
+cgenStmt (S.IfThenElse exp stmt1 stmt2) = \ctx -> do
+  ifthen <- addBlock "if.then"
+  ifelse <- addBlock "if.else"
+  ifexit <- addBlock "if.exit"
+  cond <- cgenExp exp ctx
+  test <- icmp IP.EQ undefined cond
+  cbr cond ifthen ifelse
+  return cond
 
 cgenVar :: S.VarDecl -> S.Type -> ModuleContext -> Codegen AST.Operand
 cgenVar (S.VarDecl (S.VarId (S.Ident strid)) Nothing) sty ctx = do
@@ -162,9 +175,12 @@ cgenVar (S.VarDecl (S.VarId (S.Ident strid)) (Just (S.InitExp exp))) sty ctx = d
 cgenExp :: S.Exp -> ModuleContext -> Codegen AST.Operand
 cgenExp (S.ExpName (S.Name idents)) _ = do
   let name = foldl (\seek (S.Ident str) -> seek ++ str) "" idents
-  var <- getvar name
-  val <- load var
-  return val
+  var@(AST.LocalReference ty name) <- getvar name
+  case ty of
+    AST.PointerType (AST.ArrayType size elmtTy) _ -> return var
+    AST.PointerType (AST.IntegerType bits) _ -> load var
+    AST.PointerType (AST.FloatingPointType fp) _ -> load var
+    _ -> error $ show ty
 cgenExp (S.MethodInv (S.MethodCall (S.Name idents) fnParamsExp)) ctx = do
   fnParams <- mapM (flip cgenExp ctx) fnParamsExp
   call fn (map (\p -> (p,[PA.InReg,PA.ReadOnly])) fnParams)
@@ -176,16 +192,18 @@ cgenExp (S.MethodInv (S.MethodCall (S.Name idents) fnParamsExp)) ctx = do
     fnP = Type.PointerType fnType (AddrSpace 0)
     fn = externf fnP (AST.mkName fnName)
 
-cgenExp (S.Lit (S.Int i32)) _ = return $ AST.ConstantOperand (CONST.Int 32 i32)
-cgenExp (S.Lit (S.Word i16)) _ = return $ AST.ConstantOperand (CONST.Int 16 i16)
-cgenExp (S.Lit (S.Float float)) _ = return $ AST.ConstantOperand (CONST.Float (FT.Double float))
-cgenExp (S.Lit (S.Double double)) _ = return $ AST.ConstantOperand (CONST.Float (FT.Double double))
-cgenExp (S.Lit (S.Boolean bool)) _ = return $ AST.ConstantOperand (CONST.Int 8 (if bool then 1 else 0))
-cgenExp (S.Lit (S.Char char)) _ = return $ AST.ConstantOperand (CONST.Int 8 (toInteger (ord char)))
+cgenExp (S.Lit (S.Int i32)) _ = return $ cons (CONST.Int 32 i32)
+cgenExp (S.Lit (S.Word i16)) _ = return $ cons (CONST.Int 16 i16)
+cgenExp (S.Lit (S.Float float)) _ = return $ cons (CONST.Float (FT.Double float))
+cgenExp (S.Lit (S.Double double)) _ = return $ cons (CONST.Float (FT.Double double))
+cgenExp (S.Lit (S.Boolean bool)) _ = return $ cons (CONST.Int 8 (if bool then 1 else 0))
+cgenExp (S.Lit (S.Char char)) _ = return $ cons (CONST.Int 8 (toInteger (ord char)))
 cgenExp (S.Lit (S.String string)) _ = do
-  let array = map (\char -> (CONST.Int 8 (toInteger (ord char)))) string
-  return $ AST.ConstantOperand (CONST.Array Type.i8 array)
-cgenExp (S.Lit S.Null) _ = return $ AST.ConstantOperand (CONST.Null Type.void)
+  let size = length string + 1
+      elmt c = CONST.Int 8 (toInteger (ord c))
+      array = map (\char -> elmt char) string ++ [CONST.Int 8 0]
+  return $ cons (CONST.Array Type.i8 array)
+cgenExp (S.Lit S.Null) _ = return $ cons (CONST.Null Type.void)
 
 cgenExp (S.BinOp expa op expb) ctx = do
   oa <- cgenExp expa ctx
@@ -200,30 +218,45 @@ cgenExp (S.BinOp expa op expb) ctx = do
 
 {- 数组生成 -}
 -- 访问数组
-cgenExp (S.ArrayAccess (S.ArrayIndex exp exps)) ctx = do
-  val <- cgenExp exp ctx
-  v <- extractValue val (map getidx exps)
-  traceM $ "访问数组 : " ++ show val
-  return v
-
--- 创建数组
--- 数组赋值
-cgenExp (S.Assign lhs op exp2) ctx = do
-  (val,idx) <- codegenArrayLhs lhs
-  val2 <- cgenExp exp2 ctx
-  r <- insertValue val val2 idx
+cgenExp (S.ArrayAccess (S.ArrayIndex arrayName idxs)) ctx = do
+  var <- cgenExp arrayName ctx
+  var2 <- gep var (map getidx idxs)
+  val2 <- load var2
+  traceM $ "访问数组 : " ++ show var2
   return val2
   where
-    codegenArrayLhs :: S.Lhs -> Codegen (AST.Operand,[LP.Word32])
+    getidx :: S.Exp -> AST.Operand
+    getidx (S.Lit (S.Int idx)) = cons (CONST.Int 64 idx)
+
+-- 创建数组
+cgenExp (S.ArrayCreate esty dims 0) ctx = do
+  traceM $ "创建数组 : " ++ show esty ++ ", " ++ show dims
+  let elmtTy = toLType (Just esty)
+      size = foldl (\seek (S.Lit (S.Int n)) -> seek+n) 0 dims
+      elmt = getElmtConst elmtTy
+      elmts = take (fromIntegral size) (repeat elmt)
+  return $ cons (CONST.Array elmtTy elmts)
+  where
+    getElmtConst :: Type.Type -> CONST.Constant
+    getElmtConst (Type.IntegerType bits) = CONST.Int bits 0
+    getElmtConst (Type.FloatingPointType _) = CONST.Float (FT.Double 0.0)
+
+-- 数组赋值
+cgenExp (S.Assign lhs op exp2) ctx = do
+  (var,idxs) <- codegenArrayLhs lhs
+  val2 <- cgenExp exp2 ctx
+  var2 <- gep var idxs
+  store var2 val2
+  return val2
+  where
+    codegenArrayLhs :: S.Lhs -> Codegen (AST.Operand,[AST.Operand])
     codegenArrayLhs (S.ArrayLhs (S.ArrayIndex arrayName idxs)) = do
-      val <- cgenExp arrayName ctx
-      return (val,map getidx idxs)
---      error $ "cgeExp error : " ++ show name ++ ", " ++ show idxs
+      var <- cgenExp arrayName ctx
+      return (var,map getidx idxs)
+    getidx :: S.Exp -> AST.Operand
+    getidx (S.Lit (S.Int idx)) = cons $ CONST.Int 64 idx
 
 cgenExp a ctx = error $ "cgeExp error : " ++ show a
-
-getidx :: S.Exp -> LP.Word32
-getidx (S.Lit (S.Int idx)) = fromIntegral idx
 
 toLType :: Maybe S.Type -> AST.Type
 toLType Nothing = Type.void

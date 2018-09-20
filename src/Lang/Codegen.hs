@@ -23,6 +23,7 @@ import qualified LLVM.AST.Constant as C
 import qualified LLVM.AST.Attribute as A
 import qualified LLVM.AST.CallingConvention as CC
 import qualified LLVM.AST.FloatingPointPredicate as FP
+import qualified LLVM.AST.IntegerPredicate as IP
 
 import Lang.Misc
 
@@ -279,6 +280,9 @@ frem a b = instr double $ FRem noFastMathFlags a b []
 fcmp :: FP.FloatingPointPredicate -> Operand -> Operand -> Codegen Operand
 fcmp cond a b = instr double $ FCmp cond a b []
 
+icmp :: IP.IntegerPredicate -> Operand -> Operand -> Codegen Operand
+icmp pred a b = instr i8 $ ICmp pred a b []
+
 cons :: C.Constant -> Operand
 cons = ConstantOperand
 
@@ -317,7 +321,8 @@ store :: Operand -> Operand -> Codegen ()
 store ptr val = instrVoid $ Store False ptr val Nothing 0 []
 
 load :: Operand -> Codegen Operand
-load a = instr retty $ Load False a Nothing 0 []
+load a = do
+  instr retty $ Load False a Nothing 0 []
   where
     retty = case typeOf a of
       PointerType ty _ -> ty
@@ -335,6 +340,20 @@ extractValue array idx = instr (extractValueType idx (typeOf array)) $ ExtractVa
 
 insertValue :: Operand -> Operand -> [Word32] -> Codegen Operand
 insertValue array val idx = instr (typeOf array) $ InsertValue array val idx []
+
+gep :: Operand -> [Operand] -> Codegen Operand
+gep addr is = instr (gepType (typeOf addr) is) (GetElementPtr False addr is [])
+  where
+    -- TODO: Perhaps use the function from llvm-hs-pretty (https://github.com/llvm-hs/llvm-hs-pretty/blob/master/src/LLVM/Typed.hs)
+    gepType :: Type -> [Operand] -> Type
+    gepType ty [] = ptr ty
+    gepType (PointerType ty _) (_:is') = gepType ty is'
+    gepType (StructureType _ elTys) (ConstantOperand (C.Int 32 val):is') =
+      gepType (elTys !! fromIntegral val) is'
+    gepType (StructureType _ _) (i:_) = error $ "gep: Indices into structures should be 32-bit constants. " ++ show i
+    gepType (VectorType _ elTy) (_:is') = gepType elTy is'
+    gepType (ArrayType _ elTy) (_:is') = gepType elTy is'
+    gepType t (_:_) = error $ "gep: Can't index into a " ++ show t
 -- Control Flow
 br :: Name -> Codegen (Named Terminator)
 br val = terminator $ Do $ Br val []
@@ -342,8 +361,8 @@ br val = terminator $ Do $ Br val []
 cbr :: Operand -> Name -> Name -> Codegen (Named Terminator)
 cbr cond tr fl = terminator $ Do $ CondBr cond tr fl []
 
---ret :: MonadIRBuilder m => Operand -> m ()
---ret val = emitTerm (Ret (Just val) [])
-
 ret :: Maybe Operand -> Codegen (Named Terminator)
 ret val = terminator $ Do $ Ret val []
+
+sext :: Operand -> Type -> Codegen Operand
+sext a to = instr to $ SExt a to []
