@@ -142,19 +142,6 @@ cgenStmt (S.StmtBlock (S.Block blockStmts)) = \ctx -> do
 cgenStmt (S.Return Nothing) = \ctx -> undefined
 cgenStmt (S.ExpStmt exp) = cgenExp exp
 cgenStmt (S.Return (Just exp)) = cgenExp exp
-cgenStmt (S.IfThen exp stmt) = \ctx -> do
-  ifthen <- addBlock "if.then"
-  ifelse <- addBlock "if.else"
-  cond <- cgenExp exp ctx
-  cbr cond ifthen ifelse
-  -- if then
-  setBlock ifthen
-  trval <- cgenStmt stmt ctx
-  br ifelse
-  ifthen <- getBlock
-  -- if else
-  setBlock ifelse
-  return trval
 cgenStmt (S.IfThenElse exp stmt1 stmt2) = \ctx -> do
   ifthen <- addBlock "if.then"
   ifelse <- addBlock "if.else"
@@ -174,6 +161,8 @@ cgenStmt (S.IfThenElse exp stmt1 stmt2) = \ctx -> do
   setBlock ifexit
   r <- phi [(trval,ifthen),(frval,ifelse)]
   return r
+
+cgenStmt stmt = \ctx -> error $ "暂不支持该语法 : " ++ show stmt
 
 cgenVar :: S.VarDecl -> S.Type -> ModuleContext -> Codegen AST.Operand
 cgenVar (S.VarDecl (S.VarId (S.Ident strid)) Nothing) sty ctx = do
